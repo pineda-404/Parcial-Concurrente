@@ -1,0 +1,23 @@
+
+# Binaros y archivos compilados
+bin/
+*.class
+
+# Cache de Python
+__pycache__/
+*.pyc
+
+# Bases de datos (se generan con scripts)
+*.db
+*.sqlite3
+
+# Archivos PDF (informes generados y el PDF del examen)
+*.pdf
+
+# Archivos comprimidos y backups
+*.zip
+*.tar.gz
+
+# Archivos específicos del sistema operativo
+.DS_Store
+Thumbs.db

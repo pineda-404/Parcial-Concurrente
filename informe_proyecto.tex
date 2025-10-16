@@ -1,0 +1,118 @@
+
+\documentclass[11pt, a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+
+\geometry{a4paper, margin=2.5cm}
+
+\title{
+    \textbf{Informe Técnico: Sistema Bancario Distribuido}
+    \vspace{1cm}
+    \large Programaci\'{o}n Concurrente y Distribuida
+}
+\author{Tu Nombre \and\ Nombre Compa\~n~ero 1 \and\ Nombre Compa\~n~ero 2}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\newpage
+\tableofcontents
+\newpage
+
+\section{Introducci\'{o}n}
+El presente documento detalla el dise\~n~o, la arquitectura y la implementaci\'{o}n de un sistema bancario distribuido, desarrollado como parte del examen parcial del curso de Programaci\'{o}n Concurrente y Distribuida. 
+
+El objetivo principal del proyecto es simular un sistema de transacciones bancarias que sea robusto, consistente y tolerante a fallos. Para lograrlo, se implement\'{o} una arquitectura de microservicios (nodos) distribuida, utilizando tres lenguajes de programaci\'{o}n (Java, Python y Go) para demostrar la interoperabilidad. La consistencia de los datos en las operaciones de escritura se garantiza mediante la orquestaci\'{o}n de un protocolo de \textbf{Confirmaci\'{o}n en Dos Fases (2PC)}.
+
+\section{Arquitectura Dise\~n~ada}
+Para cumplir con los requisitos de distribuci\'{o}n y tolerancia a fallos, se dise\~n~o una arquitectura multi-capa y multi-componente.
+
+\subsection{Componentes Principales}
+\begin{itemize}
+    \item \textbf{Servidor Central (Java):} Act\'{u}a como el cerebro y coordinador del sistema. Es el \'{u}nico componente que conoce la topolog\'{i}a completa del cl\'{u}ster. Sus responsabilidades son recibir las peticiones de los clientes, determinar qu\'{e} nodos deben manejar una operaci\'{o}n y orquestar el protocolo 2PC para las transacciones. 
+    
+    \item \textbf{Cl\'{u}ster de Nodos Trabajadores (Java, Python, Go):} Conforman el sistema de almacenamiento de datos distribuido. Los datos de las cuentas bancarias se encuentran particionados y replicados a lo largo de estos 9 nodos. Cada nodo es un servidor independiente que gestiona un subconjunto de los datos.
+    
+    \item \textbf{Clientes (Python):} Se desarrollaron dos tipos de clientes para interactuar con el sistema: un cliente de terminal para operaciones administrativas y un cliente con GUI (Tkinter) para consultas de usuario final.
+\end{itemize}
+
+\subsection{Modelo de Almacenamiento Dual}
+Una decisi\'{o}n clave de la arquitectura fue separar el almacenamiento de los datos seg\'{u}n su naturaleza:
+\begin{itemize}
+    \item \textbf{Archivos de Texto (.txt):} Utilizados por los Nodos Trabajadores para almacenar el dato m\'{a}s cr\'{i}tico y de acceso m\'{a}s frecuente: el \textbf{saldo de las cuentas}. Este enfoque simula un almac\'{e}n de datos en memoria de alto rendimiento. 
+    
+    \item \textbf{Base de Datos SQLite:} Utilizada como un almac\'{e}n de datos relacionales y de auditor\'{i}a. Guarda informaci\'{o}n menos cr\'{i}tica o que requiere consultas complejas, como la relaci\'{o}n entre clientes y sus cuentas, el registro de pr\'{e}stamos y un historial de todas las transacciones realizadas.
+\end{itemize}
+
+\section{Diagrama de Protocolo}
+El sistema se comunica a trav\'{e}s de sockets TCP, utilizando mensajes en formato JSON delimitados por saltos de l\'{i}nea. No se utilizaron librer\'{i}as de conexi\'{o}n de alto nivel como WebSockets o Socket.io, cumpliendo con los requisitos.
+
+\subsection{Protocolo de Consulta (Lectura)}
+Es un flujo simple y directo:
+\begin{enumerate}
+    \item El Cliente env\'{i}a una petici\'{o}n JSON (ej. `CONSULTAR_CUENTA`) al Servidor Central.
+    \item El Servidor Central determina el nodo primario de la partici\'{o}n correspondiente y le reenv\'{i}a la petici\'{o}n.
+    \item El Nodo Trabajador lee el dato de su memoria (o archivo .txt) y responde al Servidor Central.
+    \item El Servidor Central reenv\'{i}a la respuesta al Cliente.
+\end{enumerate}
+
+\subsection{Protocolo de Transferencia (Escritura con 2PC)}
+Este protocolo garantiza la consistencia de los datos:
+\begin{itemize}
+    \item \textbf{Fase 1: Preparaci\'{o}n}
+    \begin{enumerate}
+        \item El Cliente env\'{i}a una petici\'{o}n `TRANSFERIR_CUENTA` al Servidor Central.
+        \item El Servidor Central identifica todos los nodos r\'{e}plica implicados (tanto de la cuenta origen como de la destino).
+        \item Env\'{i}a un mensaje `PREPARE_TRANSFER` a todos estos nodos.
+        \item Cada nodo verifica si puede realizar su parte de la operaci\'{o}n (ej. si hay saldo suficiente), bloquea los recursos y responde `READY` si est\'{a} listo, o `ERROR` si no puede.
+    \end{enumerate}
+    \item \textbf{Fase 2: Commit o Abort}
+    \begin{enumerate}
+        \item Si \textbf{todos} los nodos respondieron `READY`, el Servidor Central da la transacci\'{o}n por viable y env\'{i}a un mensaje `COMMIT` a todos ellos. Los nodos aplican el cambio de forma permanente y responden `COMMITTED`.
+        \item Si \textbf{alg\'{u}n} nodo respondi\'{o} con error o no respondi\'{o}, el Servidor Central cancela la operaci\'{o}n y env\'{i}a un mensaje `ABORT` a todos los nodos que se hab\'{i}an preparado, para que liberen los recursos y descarten los cambios.
+    \end{enumerate}
+\end{itemize}
+
+\section{Desarrollo y Tecnolog\'{i}as}
+El desarrollo se realiz\'{o} siguiendo los requisitos del PDF, utilizando las librer\'{i}as est\'{a}ndar de cada lenguaje.
+
+\begin{itemize}
+    \item \textbf{Java (JDK 11+):} Utilizado para el backend de alto rendimiento y concurrencia (`ServidorCentral` y 7 de los `NodoWorker`). Se us\'{o} el JDBC est\'{a}ndar para la conexi\'{o}n con SQLite.
+    \item \textbf{Python (3.8+):} Utilizado para el desarrollo r\'{a}pido de los clientes (GUI y terminal), los scripts de automatizaci\'{o}n (`generar_datos`, `iniciar_cluster`, etc.) y para un `NodoWorker`, demostrando la interoperabilidad.
+    \item \textbf{Go (1.20+):} Utilizado para implementar un `NodoWorker` adicional, cumpliendo con el requisito de un tercer lenguaje para grupos de 3 integrantes y demostrando su eficiencia en tareas de red.
+\end{itemize}
+
+\section{Pruebas y Evaluaci\'{o}n de Desempe\~n~o}
+Para cumplir con el requisito de saturar el sistema y evaluar su desempe\~n~o, se utiliz\'{o} el script `scripts/load_tester.py`. Este script lanza r\'{a}fagas de transacciones de transferencia con un n\'{u}mero creciente de hilos concurrentes (10, 20, 50, 100, 150, 200) y mide dos m\'{e}tricas clave: el \textit{throughput} (transacciones por segundo) y la latencia promedio (milisegundos por transacci\'{o}n).
+
+\subsection*{Resultados y Gr\'{a}ficas}
+
+\vspace{1cm}
+\begin{center}
+    \textbf{\Large [Marcador de Posici\'{o}n]}
+\end{center}
+
+\textit{En esta secci\'{o}n se deben insertar las gr\'{a}ficas generadas a partir de la salida CSV del script `scripts/load_tester.py`. Se recomienda incluir:
+\begin{enumerate}
+    \item Un gr\'{a}fico de l\'{i}neas mostrando el \textbf{Throughput (TPS) vs. N\'{u}mero de Hilos}.
+    \item Un gr\'{a}fico de l\'{i}neas mostrando la \textbf{Latencia Promedio (ms) vs. N\'{u}mero de Hilos}.
+\end{enumerate}
+Junto a las gr\'{a}ficas, se debe a\~n~adir un breve an\'{a}lisis interpretando los resultados: c\'{o}mo escala el sistema, d\'{o}nde empieza a degradarse el rendimiento, y las posibles causas (cuellos de botella, etc.).}
+
+\vspace{1cm}
+
+\section{Conclusiones}
+El proyecto ha cumplido exitosamente con todos los requisitos fundamentales del examen. Se ha implementado una arquitectura distribuida funcional, tolerante a fallos y consistente, utilizando tres lenguajes de programaci\'{o}n que interoperan en un mismo cl\'{u}ster. 
+
+La implementaci\'{o}n del protocolo 2PC, la refactorizaci\'{o}n de la estructura del proyecto y la depuraci\'{o}n de problemas complejos de concurrencia y configuraci\'{o}n de red han sido los mayores desaf\'{i}os y, a su vez, los logros m\'{a}s significativos del desarrollo.
+
+El sistema resultante no solo es funcional, sino que est\'{a} organizado de manera profesional y documentado para su futura comprensi\'{o}n y ejecuci\'{o}n.
+
+\end{document}

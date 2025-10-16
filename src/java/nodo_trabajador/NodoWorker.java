@@ -1,7 +1,5 @@
 package nodo_trabajador;
 
-package nodo_trabajador;
-
 import java.io.*;
 import java.net.*;
 import java.sql.*;
@@ -14,9 +12,6 @@ public class NodoWorker {
     private final Map<Integer, Double> cuentas = new ConcurrentHashMap<>();
     private final Map<String, List<String>> preparedOps = new ConcurrentHashMap<>();
     private final Object localLock = new Object();
-
-    // 🔹 Ruta de la base de datos SQLite
-    private static final String DB_PATH = "db/banco_chat.db";
 
     public NodoWorker(int port, String dataFilePath) throws IOException {
         this.port = port;
@@ -102,7 +97,6 @@ public class NodoWorker {
                         case "ABORT":
                             handleAbortMsg(req, out);
                             break;
-                        // 🔹 Nuevo: Consultar préstamos
                         case "ESTADO_PAGO_PRESTAMO":
                             handlePrestamoConsulta(req, out);
                             break;
@@ -209,7 +203,8 @@ public class NodoWorker {
         synchronized (localLock) {
             List<String> ops = preparedOps.get(tx);
             if (ops == null) return false;
-            try (Connection db = DriverManager.getConnection("jdbc:sqlite:" + DB_PATH)) { // 🔹 log transacciones
+            String dbPath = System.getProperty("db.path", "db/banco_chat.db");
+            try (Connection db = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
                 for (String o : ops) {
                     String[] p = o.split(",");
                     String cmd = p[0];
@@ -244,10 +239,8 @@ public class NodoWorker {
         }
     }
 
-    // 🔹 Registrar cada transacción en SQLite
     private void registrarTransaccion(Connection db, int idCuenta, String tipo, double monto) {
-        try (PreparedStatement ps = db.prepareStatement(
-                "INSERT INTO Transacciones(id_cuenta,tipo,monto,fecha) VALUES(?,?,?,datetime('now'))")) {
+        try (PreparedStatement ps = db.prepareStatement("INSERT INTO Transacciones(id_cuenta,tipo,monto,fecha) VALUES(?,?,?,datetime('now'))")) {
             ps.setInt(1, idCuenta);
             ps.setString(2, tipo);
             ps.setDouble(3, monto);
@@ -257,11 +250,11 @@ public class NodoWorker {
         }
     }
 
-    // 🔹 Consulta de préstamos
     private void handlePrestamoConsulta(Map<String,String> req, BufferedWriter out) throws IOException {
         int acc = Integer.parseInt(req.get("account"));
         StringBuilder sb = new StringBuilder();
-        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + DB_PATH)) {
+        String dbPath = System.getProperty("db.path", "db/banco_chat.db");
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
             PreparedStatement ps1 = c.prepareStatement("SELECT id_cliente FROM Cuentas WHERE id_cuenta=?");
             ps1.setInt(1, acc);
             ResultSet r1 = ps1.executeQuery();
@@ -269,26 +262,22 @@ public class NodoWorker {
                 sb.append("{\"status\":\"ERROR\",\"error\":\"CUENTA_NO_EXISTE\"}");
             } else {
                 int idcli = r1.getInt(1);
-                PreparedStatement ps2 = c.prepareStatement(
-                        "SELECT id_prestamo,monto,monto_pendiente,estado,fecha_solicitud FROM Prestamos WHERE id_cliente=?");
+                PreparedStatement ps2 = c.prepareStatement("SELECT id_prestamo,monto,monto_pendiente,estado,fecha_solicitud FROM Prestamos WHERE id_cliente=?");
                 ps2.setInt(1, idcli);
                 ResultSet rs = ps2.executeQuery();
                 sb.append("{\"status\":\"OK\",\"data\":[");
                 boolean first = true;
                 while (rs.next()) {
                     if (!first) sb.append(",");
-                    sb.append("{\"id_prestamo\":").append(rs.getInt(1))
-                      .append(",\"monto_total\":").append(rs.getDouble(2))
-                      .append(",\"monto_pendiente\":").append(rs.getDouble(3))
-                      .append(",\"estado\":\"").append(rs.getString(4))
-                      .append("\",\"fecha_solicitud\":\"").append(rs.getString(5)).append("\"}");
+                    sb.append(String.format("{\"id_prestamo\":%d,\"monto_total\":%.2f,\"monto_pendiente\":%.2f,\"estado\":\"%s\",\"fecha_solicitud\":\"%s\"}",
+                        rs.getInt(1), rs.getDouble(2), rs.getDouble(3), rs.getString(4), rs.getString(5)));
                     first = false;
                 }
                 sb.append("]}");
             }
         } catch (Exception e) {
             sb.setLength(0);
-            sb.append("{\"status\":\"ERROR\",\"error\":\"").append(e.getMessage()).append("\"}");
+            sb.append(String.format("{\"status\":\"ERROR\",\"error\":\"%s\"}", e.getMessage().replace('"', '\'')));
         }
         out.write(sb.toString() + "\n");
         out.flush();
@@ -304,27 +293,35 @@ public class NodoWorker {
         StringBuilder sb = new StringBuilder("{");
         for (int i = 0; i < kv.length - 1; i += 2) {
             if (i > 0) sb.append(",");
-            sb.append("\"").append(kv[i]).append("\":");
+            sb.append(String.format("\"%s\":", kv[i]));
             String v = kv[i + 1];
-            boolean numeric = v.matches("^-?\\d+(\\.\\d+)?$");
-            sb.append(numeric ? v : "\"" + v + "\"");
+            try {
+                Double.parseDouble(v);
+                sb.append(v);
+            } catch (NumberFormatException e) {
+                sb.append(String.format("\"%s\"", v));
+            }
         }
         sb.append("}");
         return sb.toString();
     }
 
-    private Map<String,String> parseJson(String s) {
-        Map<String,String> m = new HashMap<>();
+    private Map<String, String> parseJson(String s) {
+        Map<String, String> map = new HashMap<>();
         s = s.trim();
-        if (!s.startsWith("{") || !s.endsWith("}")) return m;
-        s = s.substring(1, s.length()-1);
-        String[] parts = s.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
-        for (String part : parts) {
-            String[] kv = part.split(":(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", 2);
-            if (kv.length != 2) continue;
-            m.put(kv[0].replace("\"","").trim(), kv[1].replace("\"","").trim());
+        if (!s.startsWith("{") || !s.endsWith("}")) return map;
+        s = s.substring(1, s.length() - 1); // Remove braces
+
+        String[] pairs = s.split(","); 
+        for (String pair : pairs) {
+            String[] kv = pair.split(":", 2);
+            if (kv.length == 2) {
+                String key = kv[0].trim().replace("\"", "");
+                String value = kv[1].trim().replace("\"", "");
+                map.put(key, value);
+            }
         }
-        return m;
+        return map;
     }
 
     public static void main(String[] args) throws Exception {
@@ -333,7 +330,9 @@ public class NodoWorker {
             return;
         }
         int port = Integer.parseInt(args[0]);
-        NodoWorker n = new NodoWorker(port, args[1]);
+        String dataFile = args[1];
+        Class.forName("org.sqlite.JDBC");
+        NodoWorker n = new NodoWorker(port, dataFile);
         n.start();
     }
 }
