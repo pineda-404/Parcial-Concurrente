@@ -1,0 +1,8 @@
+{
+    "java.project.sourcePaths": [
+        "src"
+    ],
+    "python.analysis.extraPaths": [
+        "./python/servidor_chat"
+    ]
+}
